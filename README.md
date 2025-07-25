@@ -1,2 +1,20 @@
 # exportr
-R package that Provides enhanced versions of common data export functions      (fwrite, write.csv, saveRDS) that automatically track data provenance.     Records information about the source script, execution environment,      and data characteristics. Offers flexible metadata storage options 
+Enhanced data export functions with automatic provenance tracking.
+
+## Installation
+
+```r
+# Install from GitHub
+devtools::install_github("bravemaster3/exportr")
+
+# Quick start
+library(exportr)
+
+# Instead of data.table::fwrite()
+fwrite_with_metadata(my_data, "output.csv")
+
+# Instead of write.csv()
+write_csv_with_metadata(my_data, "output.csv")
+
+# Instead of saveRDS()
+saveRDS_with_metadata(my_object, "output.rds")

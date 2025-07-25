@@ -1,0 +1,474 @@
+---
+title: "Getting Started with exportr"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting Started with exportr}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+```{r setup}
+library(exportr)
+library(data.table)  # For fwrite_with_metadata
+```
+
+## Introduction
+
+The `exportr` package enhances standard R data export functions by automatically tracking data provenance. Every time you export data, `exportr` records which R script created the file, making it easy to trace data files back to their source code.
+
+## Why Use exportr?
+
+### The Problem
+In research and data analysis workflows, it's common to:
+
+- Generate multiple output files from different scripts
+- Lose track of which script created which file  
+- Need to recreate analyses but forget the source code
+- Share data files without documentation of how they were created
+- Struggle with data lineage and reproducibility
+
+### The Solution
+`exportr` solves these problems by automatically embedding metadata about the source script directly into the exported files. **The most important piece of metadata is the full path to the R script that created the file.**
+
+## How It Works
+
+1. **Save the file normally**: Your data is saved exactly as it would be with the standard function
+2. **Detect the source script**: `exportr` automatically identifies which R script is calling the function  
+3. **Add metadata**: The script path and other information is stored alongside the file
+
+**Key Point**: The exported data files contain exactly the same data as the original functions would produce - no modifications to file contents!
+
+## Basic Usage
+
+Load the package and use the enhanced export functions exactly like you would use the standard ones:
+
+```{r basic_usage}
+library(exportr)
+
+# Standard approach:
+# fwrite(iris, "iris.csv")
+
+# Enhanced approach with automatic metadata:
+fwrite_with_metadata(iris, "iris.csv")
+
+# Check what metadata was added
+verify_file_metadata("iris.csv")
+```
+
+## Available Functions
+
+### Enhanced Export Functions
+
+All functions work exactly like their standard counterparts but add automatic metadata:
+
+```{r functions}
+# Enhanced data.table::fwrite() - PRIORITY: script path tracking
+fwrite_with_metadata(mtcars, "cars.csv")
+read_exportr_metadata("cars.csv")
+
+# Enhanced utils::write.csv()
+write_csv_with_metadata(iris, "flowers.csv")
+
+# Enhanced base::saveRDS()
+model <- lm(mpg ~ wt + hp, data = mtcars)
+saveRDS_with_metadata(model, "car_model.rds")
+```
+
+### Utility Functions
+
+```{r utilities}
+# Check if a file has exportr metadata
+has_exportr_metadata("cars.csv")
+
+has_exportr_metadata("car_model.rds")
+metadata <- read_exportr_metadata("car_model.rds")
+print(metadata)
+# Read metadata from a file
+metadata <- read_exportr_metadata("cars.csv")
+print(metadata$script_path)
+
+# Verify metadata (detailed view)
+verify_file_metadata("cars.csv")
+
+# Get current script information
+script_info <- get_script_info()
+print(script_info)
+```
+
+## Understanding Metadata Storage
+
+Unlike image files that support EXIF data, CSV and RDS files need different approaches for metadata storage.
+
+### Where Metadata Is Stored
+
+#### Windows
+- **Primary method**: Alternate data streams
+- **Location**: `filename.csv:exportr.script_path`
+- **Verification**: Command Prompt: `dir /R filename.csv`
+- **Access**: `more < "filename.csv:exportr.script_path"`
+
+#### macOS  
+- **Primary method**: Extended attributes via `xattr`
+- **Location**: `com.exportr.script_path` attribute
+- **Verification**: Terminal: `xattr -l filename.csv`
+- **Access**: `xattr -p com.exportr.script_path filename.csv`
+
+#### Linux
+- **Primary method**: Extended attributes via `setfattr`
+- **Location**: `user.exportr.script_path` attribute  
+- **Verification**: Terminal: `getfattr -d filename.csv`
+- **Access**: `getfattr -n user.exportr.script_path filename.csv`
+
+#### All Platforms (Fallback)
+- **Fallback method**: Hidden sidecar files
+- **Location**: `.filename.csv.exportr` files alongside your data
+- **Contents**: JSON or human-readable metadata
+
+## Metadata Modes
+
+You can control how metadata is stored using the `metadata_mode` parameter:
+
+```{r metadata_modes}
+# Default: Try file attributes first, fallback to sidecar
+fwrite_with_metadata(iris, "iris_default.csv", metadata_mode = "attribute")
+
+# Force sidecar file creation
+fwrite_with_metadata(mtcars, "cars_sidecar.csv", metadata_mode = "sidecar")
+
+# Create log file (CSV format for easy analysis)
+fwrite_with_metadata(trees, "trees_log.csv", metadata_mode = "log")
+
+# No metadata tracking
+fwrite_with_metadata(airquality, "air_none.csv", metadata_mode = "none")
+```
+
+## Real-World Example: Research Workflow
+
+Let's simulate a typical research workflow to see exportr in action:
+
+```{r workflow_example}
+# =============================================================================
+# Step 1: Data Preparation Script (save as "data_prep.R")
+# =============================================================================
+
+# Load and clean raw data
+raw_data <- data.frame(
+  id = 1:1000,
+  group = sample(c("Control", "Treatment A", "Treatment B"), 1000, replace = TRUE),
+  baseline = rnorm(1000, mean = 100, sd = 15),
+  followup = rnorm(1000, mean = 105, sd = 18)
+)
+
+# Clean the data
+clean_data <- raw_data[complete.cases(raw_data), ]
+clean_data$change_score <- clean_data$followup - clean_data$baseline
+
+# Export cleaned data with metadata
+fwrite_with_metadata(clean_data, "data/cleaned_dataset.csv")
+
+# =============================================================================
+# Step 2: Analysis Script (save as "statistical_analysis.R") 
+# =============================================================================
+
+# Read the cleaned data
+clean_data <- fread("data/cleaned_dataset.csv")
+
+# Perform statistical analysis
+library(dplyr)
+results <- clean_data %>%
+  group_by(group) %>%
+  summarise(
+    n = n(),
+    mean_baseline = mean(baseline),
+    mean_followup = mean(followup),
+    mean_change = mean(change_score),
+    se_change = sd(change_score) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# Export results with metadata
+fwrite_with_metadata(results, "results/group_analysis.csv")
+
+# Create and save statistical model
+model <- lm(change_score ~ group, data = clean_data)
+saveRDS_with_metadata(model, "models/change_model.rds")
+
+# =============================================================================
+# Step 3: Later - Check File Provenance
+# =============================================================================
+
+# Check where each file came from
+verify_file_metadata("data/cleaned_dataset.csv")
+verify_file_metadata("results/group_analysis.csv") 
+verify_file_metadata("models/change_model.rds")
+```
+
+Expected output:
+```
+Metadata for cleaned_dataset.csv:
+  Script path: C:/project/scripts/data_prep.R
+  Created: 2025-07-25 14:30:45
+  User: researcher
+  Detection method: rstudio_api
+
+Metadata for group_analysis.csv:
+  Script path: C:/project/scripts/statistical_analysis.R
+  Created: 2025-07-25 15:15:22
+  User: researcher
+  Detection method: rstudio_api
+
+Metadata for change_model.rds:
+  Script path: C:/project/scripts/statistical_analysis.R
+  Created: 2025-07-25 15:15:30
+  User: researcher
+  Detection method: rstudio_api
+```
+
+## Integration with Existing Code
+
+`exportr` functions are designed as drop-in replacements. To add metadata tracking to existing code:
+
+```{r integration}
+# Before: Standard R functions
+library(data.table)
+fwrite(my_data, "output.csv")
+write.csv(summary_stats, "summary.csv")
+saveRDS(fitted_model, "model.rds")
+
+# After: Enhanced functions with metadata tracking
+library(exportr)
+fwrite_with_metadata(my_data, "output.csv")
+write_csv_with_metadata(summary_stats, "summary.csv")  
+saveRDS_with_metadata(fitted_model, "model.rds")
+```
+
+## Verification and Troubleshooting
+
+### Check System Capabilities
+
+```{r system_check}
+# Check what metadata storage methods are available on your system
+system_info()
+
+# Test script detection
+test_script_detection()
+```
+
+### Verify Metadata Was Written
+
+```{r verification}
+# Method 1: Use exportr's verification function
+verify_file_metadata("my_file.csv")
+
+# Method 2: Check if metadata exists
+has_exportr_metadata("my_file.csv")
+
+# Method 3: Read metadata back
+metadata <- read_exportr_metadata("my_file.csv")
+print(metadata)
+```
+
+### Platform-Specific Verification
+
+#### Windows (Command Prompt)
+```cmd
+# Check for alternate data streams
+dir /R "my_file.csv"
+
+# Read script path
+more < "my_file.csv:exportr.script_path"
+```
+
+#### macOS (Terminal)
+```bash
+# Check for extended attributes
+xattr -l my_file.csv
+
+# Read script path
+xattr -p com.exportr.script_path my_file.csv
+```
+
+#### Linux (Terminal)
+```bash
+# Check for extended attributes
+getfattr -d my_file.csv
+
+# Read script path  
+getfattr -n user.exportr.script_path my_file.csv
+```
+
+### Common Issues and Solutions
+
+#### Script Detection Not Working
+```{r troubleshooting_script}
+# Check what exportr detects
+script_info <- get_script_info()
+print(script_info$detection_method)
+print(script_info$script_path)
+
+# If detection fails, the method will be "unknown"
+# This often happens in interactive sessions
+```
+
+#### Metadata Not Being Stored
+```{r troubleshooting_metadata}
+# Check if metadata was added (should return TRUE)
+has_exportr_metadata("your_file.csv")
+
+# Look for sidecar files (fallback method)
+list.files(pattern = "\\.exportr$", all.files = TRUE)
+
+# Check system capabilities
+caps <- check_system_capabilities()
+print(caps$recommended_mode)
+```
+
+## Best Practices
+
+### 1. Use Meaningful File Names
+Since the script path is tracked, use descriptive output file names:
+```{r best_practices_names}
+# Good
+fwrite_with_metadata(cleaned_data, "results/experiment1_cleaned_data.csv")
+fwrite_with_metadata(summary_stats, "results/experiment1_summary_statistics.csv")
+
+# Avoid generic names
+# fwrite_with_metadata(data, "output.csv")
+# fwrite_with_metadata(results, "temp.csv")
+```
+
+### 2. Organize Your Scripts
+Keep analysis scripts in logical directories for better traceability:
+```
+project/
+├── scripts/
+│   ├── 01_data_preparation.R
+│   ├── 02_exploratory_analysis.R
+│   ├── 03_statistical_modeling.R
+│   └── 04_visualization.R
+├── data/
+│   ├── raw/
+│   └── processed/
+└── results/
+    ├── figures/
+    ├── tables/
+    └── models/
+```
+
+### 3. Check Metadata Periodically
+```{r best_practices_check}
+# Verify tracking is working
+verify_file_metadata("important_results.csv")
+
+# Check multiple files at once
+files_to_check <- c("data.csv", "results.csv", "model.rds")
+for (file in files_to_check) {
+  if (file.exists(file)) {
+    cat("\n")
+    verify_file_metadata(file)
+  }
+}
+```
+
+### 4. Document Your Workflow
+Combine `exportr` with good commenting and documentation practices:
+```{r best_practices_document}
+# ==============================================================================
+# Data Analysis Pipeline - Step 2: Statistical Modeling
+# Author: Researcher Name
+# Date: 2025-07-25
+# Purpose: Fit linear mixed-effects models to experimental data
+# ==============================================================================
+
+# Load preprocessed data (created by 01_data_preparation.R)
+analysis_data <- fread("data/processed/experimental_data.csv")
+
+# Fit primary model
+primary_model <- lmer(response ~ treatment + (1|subject), data = analysis_data)
+
+# Export model with automatic script path tracking
+saveRDS_with_metadata(primary_model, "models/primary_lmer_model.rds")
+
+# Export model results table
+model_results <- broom.mixed::tidy(primary_model)
+fwrite_with_metadata(model_results, "results/primary_model_coefficients.csv")
+```
+
+## Advanced Features
+
+### Custom Metadata Modes
+```{r advanced_modes}
+# Force specific storage method
+fwrite_with_metadata(data, "file.csv", metadata_mode = "sidecar")
+
+# Create both sidecar and log files
+fwrite_with_metadata(data, "file.csv", metadata_mode = "sidecar", create_log = TRUE)
+```
+
+### Reading Comprehensive Metadata
+```{r advanced_reading}
+# Read all metadata from all sources
+all_metadata <- read_all_metadata("my_file.csv")
+print(names(all_metadata))  # Shows: sidecar, attributes, log, etc.
+
+# Compare metadata across different storage methods
+compare_metadata_sources("my_file.csv")
+```
+
+### Cleaning Up Metadata
+```{r advanced_cleanup}
+# Remove all metadata from a file
+clean_metadata("test_file.csv", 
+               remove_sidecar = TRUE,
+               remove_attributes = TRUE, 
+               remove_metadata_file = TRUE)
+```
+
+## Package Configuration
+
+### Set Global Options
+```{r configuration}
+# Set package-wide defaults
+set_exportr_options(
+  default_metadata_mode = "attribute",
+  verbose = TRUE,
+  fallback_to_sidecar = TRUE
+)
+
+# Check current options
+get_exportr_options()
+```
+
+## Conclusion
+
+`exportr` provides a simple but powerful way to maintain data provenance in your R workflows. By automatically tracking which script created each output file, it helps ensure reproducibility and makes collaboration easier.
+
+### Key Benefits:
+- **Automatic provenance tracking**: No extra work required
+- **Script path priority**: Focus on the most important metadata
+- **Drop-in replacements**: Works with existing code
+- **Cross-platform**: Windows, macOS, and Linux support
+- **Multiple storage methods**: Robust fallback options
+- **No file modification**: Original data integrity preserved
+
+### Getting Started:
+1. Replace your existing export functions with `_with_metadata` versions
+2. Use `verify_file_metadata()` to check that tracking is working
+3. Incorporate into your research workflow for better reproducibility
+
+Start using `exportr` today to never lose track of your data provenance again!
+
+## Further Reading
+
+- Check out the package documentation: `help(package = "exportr")`
+- Test script detection: `test_script_detection()`
+- Verify system capabilities: `system_info()`
+- Try the demo: `demo_exportr()`
